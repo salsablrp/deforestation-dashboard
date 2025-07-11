@@ -1,0 +1,7 @@
+leafmap
+ipywidgets
+rasterio
+scikit-learn
+pandas
+numpy
+matplotlib
