@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir voila \
     matplotlib
 
 # Enable widgets
-RUN jupyter nbextension enable --py widgetsnbextension --sys-prefix
+# RUN jupyter nbextension enable --py widgetsnbextension --sys-prefix
 
 # Set Voilà as the default entrypoint
 CMD ["voila", "--port=8888", "--no-browser", "deforestation-analysis.ipynb"]
