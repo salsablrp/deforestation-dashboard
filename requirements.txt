@@ -1,3 +1,7 @@
+Flask
+Flask-CORS
+earthengine-api
+gunicorn
 voila
 leafmap
 ipywidgets
