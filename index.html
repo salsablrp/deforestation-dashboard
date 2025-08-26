@@ -160,18 +160,18 @@
                                     <p id="deforestation-stat" class="text-3xl font-bold text-red-800">--</p>
                                 </div>
                                 <div class="bg-green-50 p-4 rounded-lg">
-                                    <p class="text-sm text-green-600 font-medium">Max NDVI Loss</p>
+                                    <p class="text-sm text-green-600 font-medium">Max Index Loss</p>
                                     <p id="ndvi-stat" class="text-3xl font-bold text-green-800">--</p>
                                 </div>
                             </div>
                         </div>
                         <div class="mt-6 text-xs text-gray-400">
-                            <p>Note: This is a frontend prototype. Data is simulated and does not represent real-time analysis from GEE.</p>
+                            <p>Note: Backend is using real GEE data. Chart data is illustrative.</p>
                         </div>
                     </div>
                 </div>
                  <div class="bg-white p-6 rounded-xl shadow-md">
-                    <h2 class="text-lg font-bold text-gray-800 mb-4">Historical Deforestation Trend (Simulated)</h2>
+                    <h2 class="text-lg font-bold text-gray-800 mb-4">Historical Deforestation Trend (Illustrative)</h2>
                     <div class="chart-container">
                         <canvas id="deforestationChart"></canvas>
                     </div>
@@ -235,10 +235,7 @@
 
             let aoiBounds;
             let aoiLayer = null;
-            const map = L.map('map').setView([0, 0], 2);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OpenStreetMap contributors'
-            }).addTo(map);
+            let map = null;
             
             let deforestationChart;
             const chartCtx = document.getElementById('deforestationChart').getContext('2d');
@@ -250,6 +247,31 @@
             const resultsDashboard = document.getElementById('results-dashboard');
             const loader = document.getElementById('loader');
 
+            function setUIState(state) {
+                if (state === 'loading') {
+                    welcomeScreen.classList.remove('hidden');
+                    resultsDashboard.classList.add('hidden');
+                    loader.classList.remove('hidden');
+                } else if (state === 'results') {
+                    welcomeScreen.classList.add('hidden');
+                    resultsDashboard.classList.remove('hidden');
+                    loader.classList.add('hidden');
+                } else { // 'welcome' state
+                    welcomeScreen.classList.remove('hidden');
+                    resultsDashboard.classList.add('hidden');
+                    loader.classList.add('hidden');
+                }
+            }
+
+            function initializeMap() {
+                if (!map) {
+                    map = L.map('map').setView([0, 0], 2);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{y}.png', {
+                        attribution: '&copy; OpenStreetMap contributors'
+                    }).addTo(map);
+                }
+            }
+
             function runAnalysis() {
                 const selectedCountry = countrySelect.value;
                 const selectedProvince = provinceSelect.value;
@@ -258,15 +280,12 @@
                     alert("Please select a country and a province first.");
                     return;
                 }
-
-                welcomeScreen.classList.remove('hidden');
-                resultsDashboard.classList.add('hidden');
-                loader.classList.remove('hidden');
+                
+                setUIState('loading');
                 
                 const aoiName = `${selectedProvince}, ${selectedCountry}`;
                 document.getElementById('aoi-name').textContent = aoiName;
-                aoiBounds = aoiData[selectedCountry].provinces[selectedProvince];
-
+                
                 const requestBody = {
                     province: selectedProvince,
                     country: selectedCountry,
@@ -289,9 +308,11 @@
                 .then(data => {
                     console.log("Data received from backend:", data);
                     
+                    setUIState('results');
+                    initializeMap();
+                    
                     clearMapLayers();
 
-                    // Add layers depending on checkboxes
                     if (document.getElementById('showDeforested').checked && data.tiles.deforested) {
                         imageLayers.deforested = L.tileLayer(data.tiles.deforested, { attribution: 'GEE' }).addTo(map);
                     }
@@ -302,52 +323,37 @@
                         imageLayers.clusters = L.tileLayer(data.tiles.clusters, { attribution: 'GEE' }).addTo(map);
                     }
 
-                    // AOI boundary
-                    if (aoiLayer) {
-                        map.removeLayer(aoiLayer);  // remove old boundary
-                        aoiLayer = null;
-                    }
+                    if (aoiLayer) map.removeLayer(aoiLayer);
                     if (data.aoi) {
                         aoiLayer = L.geoJSON(data.aoi, {
-                            color: "#1D4ED8",
-                            weight: 2,
-                            fillOpacity: 0.05
+                            style: { color: "#1D4ED8", weight: 2, fillOpacity: 0.05 }
                         }).addTo(map);
-
-                        map.fitBounds(aoiLayer.getBounds());
                     }
 
-                    // Stats
                     document.getElementById('deforestation-stat').textContent = `${data.stats.deforestedAreaKm2} km²`;
                     document.getElementById('ndvi-stat').textContent = `${data.stats.maxIndexLoss}`;
 
                     updateChart(); 
+                    
+                    setTimeout(() => {
+                        map.invalidateSize();
+                        if (aoiLayer) {
+                            map.fitBounds(aoiLayer.getBounds());
+                        }
+                    }, 1); 
                 })
                 .catch(error => {
                     console.error('Error fetching data from backend:', error);
                     alert(`Failed to run analysis: ${error.message}`);
-                })
-                .finally(() => {
-                    loader.classList.add('hidden');
-                    welcomeScreen.classList.add('hidden');
-                    resultsDashboard.classList.remove('hidden');
-                    
-                    setTimeout(() => {
-                        map.invalidateSize();
-                        map.fitBounds(aoiBounds);
-                    }, 1);
+                    setUIState('welcome');
                 });
             }
 
             function resetApp() {
-                welcomeScreen.classList.remove('hidden');
-                resultsDashboard.classList.add('hidden');
-                loader.classList.add('hidden');
+                setUIState('welcome');
                 clearMapLayers();
-                if (aoiLayer) {
-                    map.removeLayer(aoiLayer);
-                    aoiLayer = null;
-                }
+                if (aoiLayer && map) map.removeLayer(aoiLayer);
+                aoiLayer = null;
 
                 countrySelect.value = "";
                 provinceSelect.innerHTML = '<option value="">Select a Province</option>';
@@ -365,13 +371,15 @@
                     deforestationChart = null;
                 }
                 
-                map.setView([0, 0], 2);
+                if (map) {
+                    map.setView([0, 0], 2);
+                }
             }
 
             function clearMapLayers() {
                 for (const key in imageLayers) {
-                    if (map.hasLayer(imageLayers[key])) {
-                        map.removeLayer(imageLayers[key]);
+                    if (map && map.hasLayer(imageLayers[key])) {
+                        map.removeLayer(imageLayers[key]); // THIS WAS THE BUG
                     }
                 }
             }
