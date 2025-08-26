@@ -85,30 +85,33 @@ def analyze_deforestation():
         # --- OPTIMIZED STATISTICS CALCULATION ---
         pixel_area = ee.Image.pixelArea().divide(1e6)
         stats_image = deforested.multiply(pixel_area).addBands(change)
-        
-        stats = stats_image.reduceRegion(
-            reducer=ee.Reducer.sum().combine(ee.Reducer.min(), '', True),
-            geometry=aoi,
-            scale=1000, # Increased scale for faster stats
-            maxPixels=1e9,
-            bestEffort=True
-        )
-        
-        # Call getInfo() only ONCE for all stats
-        stats_info = stats.getInfo()
+
+        try:
+            stats_info = stats_image.reduceRegion(
+                reducer=ee.Reducer.sum().combine(ee.Reducer.min(), '', True),
+                geometry=aoi,
+                scale=1000,
+                maxPixels=1e9,
+                bestEffort=True
+            ).getInfo()
+        except Exception:
+            stats_info = {}
+
         deforested_area = stats_info.get('nd_sum', 0)
         min_index = stats_info.get('nd_min', 0)
 
-        # --- GENERATE MAP TILES (NON-BLOCKING) ---
+        # --- MAP TILES ---
         deforested_map = deforested.getMapId({'palette': 'red', 'min': 0, 'max': 1})
         change_map = change.getMapId({'min': -0.5, 'max': 0.5, 'palette': ['red','white','green']})
-        
-        training = image2.sample(region=aoi, scale=1000, numPixels=5000, seed=1)
+
+        # --- CLUSTERS ---
+        training = image2.sample(region=aoi, scale=1000, numPixels=2000, seed=1)
         clusterer = ee.Clusterer.wekaKMeans(3).train(training)
         classified = image2.cluster(clusterer)
         classified_map = classified.getMapId({'min': 0, 'max': 2, 'palette': ['green','yellow','brown']})
-        
-        aoi_geojson = aoi.getInfo()
+
+        # --- AOI SIMPLIFIED ---
+        aoi_geojson = aoi.simplify(1000).getInfo()
 
         return jsonify({
             'tiles': {
@@ -122,6 +125,7 @@ def analyze_deforestation():
             },
             'aoi': aoi_geojson
         })
+
 
     except ee.ee_exception.EEException as e:
         print(f"GEE Error: {e}")
