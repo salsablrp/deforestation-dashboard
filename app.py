@@ -9,6 +9,7 @@ CORS(app)
 
 # --- GEE AUTHENTICATION ---
 try:
+    ee.Authenticate()
     ee.Initialize(project='ee-salsabilarp')
     print("GEE Initialized using service account.")
 except ee.EEException as e:
