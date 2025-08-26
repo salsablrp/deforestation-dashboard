@@ -90,28 +90,20 @@ def analyze_deforestation():
             stats_info = stats_image.reduceRegion(
                 reducer=ee.Reducer.sum().combine(ee.Reducer.min(), '', True),
                 geometry=aoi,
-                scale=1000,
-                maxPixels=1e9,
+                scale=5000,        # coarser = faster
+                maxPixels=1e8,
                 bestEffort=True
             ).getInfo()
-        except Exception:
+        except Exception as e:
+            print(f"Stats computation failed: {e}")
             stats_info = {}
 
         deforested_area = stats_info.get('nd_sum', 0)
         min_index = stats_info.get('nd_min', 0)
 
-        # --- MAP TILES ---
-        deforested_map = deforested.getMapId({'palette': 'red', 'min': 0, 'max': 1})
-        change_map = change.getMapId({'min': -0.5, 'max': 0.5, 'palette': ['red','white','green']})
-
-        # --- CLUSTERS ---
-        training = image2.sample(region=aoi, scale=1000, numPixels=2000, seed=1)
-        clusterer = ee.Clusterer.wekaKMeans(3).train(training)
-        classified = image2.cluster(clusterer)
-        classified_map = classified.getMapId({'min': 0, 'max': 2, 'palette': ['green','yellow','brown']})
-
         # --- AOI SIMPLIFIED ---
-        aoi_geojson = aoi.simplify(1000).getInfo()
+        aoi_geojson = aoi.simplify(5000).getInfo()
+
 
         return jsonify({
             'tiles': {
