@@ -1,19 +1,38 @@
-# backend/app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import ee
 import ee.ee_exception
+import os
+import json
 
 app = Flask(__name__)
 CORS(app)
 
-# --- GEE AUTHENTICATION ---
+# --- ENHANCED GEE AUTHENTICATION & LOGGING ---
 try:
-    ee.Authenticate()
-    ee.Initialize(project='ee-salsabilarp')
-    print("GEE Initialized using service account.")
-except ee.EEException as e:
-    print(f"Error initializing GEE: {e}")
+    print("Attempting to initialize Earth Engine...")
+    
+    creds_json_str = os.environ.get('GEE_CREDENTIALS')
+    
+    if creds_json_str:
+        print(f"Found GEE_CREDENTIALS environment variable. Length: {len(creds_json_str)}")
+        creds_json = json.loads(creds_json_str)
+        credentials = ee.ServiceAccountCredentials(
+            client_email=creds_json['client_email'],
+            private_key_data=creds_json['private_key']
+        )
+        ee.Initialize(credentials=credentials, project='ee-salsabilarp')
+        print("SUCCESS: Earth Engine initialized using GEE_CREDENTIALS.")
+    else:
+        print("WARNING: GEE_CREDENTIALS environment variable not found. Attempting default initialization.")
+        # Fallback for local development if needed, but will fail on Render without credentials
+        ee.Initialize(project='ee-salsabilarp')
+        print("Initialized with default credentials (will fail on server if not configured).")
+
+except Exception as e:
+    print(f"FATAL: Could not initialize Earth Engine. The server will not be able to process requests.")
+    print(f"Error details: {e}")
+    # We don't raise the exception, so we can see more logs if needed.
 
 # --- UTILS ---
 def get_composite(year, aoi):
