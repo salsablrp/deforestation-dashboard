@@ -166,7 +166,7 @@
                             </div>
                         </div>
                         <div class="mt-6 text-xs text-gray-400">
-                            <p>Note: Backend is using real GEE data. Chart data is illustrative.</p>
+                            <p>Backend is using real GEE data. Chart data is illustrative.</p>
                         </div>
                     </div>
                 </div>
@@ -233,7 +233,6 @@
                 }
             });
 
-            let aoiBounds;
             let aoiLayer = null;
             let map = null;
             
@@ -379,7 +378,7 @@
             function clearMapLayers() {
                 for (const key in imageLayers) {
                     if (map && map.hasLayer(imageLayers[key])) {
-                        map.removeLayer(imageLayers[key]); // THIS WAS THE BUG
+                        map.removeLayer(imageLayers[key]); // CORRECTED THIS LINE
                     }
                 }
             }
