@@ -1,3 +1,5 @@
+# app.py
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import ee
@@ -8,30 +10,21 @@ import json
 app = Flask(__name__)
 CORS(app)
 
-# --- GEE AUTHENTICATION ---
+# --- ROBUST GEE AUTHENTICATION ---
 try:
     print("Attempting to initialize Earth Engine...")
-    
     creds_json_str = os.environ.get('GEE_CREDENTIALS')
+    if not creds_json_str:
+        raise ValueError("GEE_CREDENTIALS environment variable not found.")
     
-    if creds_json_str:
-        print(f"Found GEE_CREDENTIALS environment variable. Length: {len(creds_json_str)}")
-        creds_json = json.loads(creds_json_str)
-        
-        credentials = ee.ServiceAccountCredentials(
-            creds_json['client_email'], 
-            key_data=creds_json['private_key']
-        )
-        
-        ee.Initialize(credentials=credentials, project='ee-salsabilarp')
-        print("SUCCESS: Earth Engine initialized using GEE_CREDENTIALS.")
-    else:
-        print("WARNING: GEE_CREDENTIALS environment variable not found.")
-        raise ValueError("GEE_CREDENTIALS not set on server.")
+    print(f"Found GEE_CREDENTIALS environment variable. Length: {len(creds_json_str)}")
+    creds_json = json.loads(creds_json_str)
+    credentials = ee.ServiceAccountCredentials(creds_json['client_email'], key_data=creds_json['private_key'])
+    ee.Initialize(credentials=credentials, project='ee-salsabilarp')
+    print("SUCCESS: Earth Engine initialized using GEE_CREDENTIALS.")
 
 except Exception as e:
-    print(f"FATAL: Could not initialize Earth Engine. The server will not be able to process requests.")
-    print(f"Error details: {e}")
+    print(f"FATAL: Could not initialize Earth Engine. Error details: {e}")
 
 # --- UTILS ---
 def get_composite(year, aoi):
@@ -51,16 +44,17 @@ def get_ndvi(img):
 def get_evi(img):
     return img.expression(
         '2.5 * ((NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1))',
-        {
-            'NIR': img.select('B8'),
-            'RED': img.select('B4'),
-            'BLUE': img.select('B2')
-        }
+        {'NIR': img.select('B8'), 'RED': img.select('B4'), 'BLUE': img.select('B2')}
     ).rename('nd')
 
 # --- API ENDPOINT ---
 @app.route('/analyze', methods=['POST'])
 def analyze_deforestation():
+    try:
+        ee.Number(1).getInfo()
+    except Exception:
+        return jsonify({"error": "Earth Engine client library not initialized on the server. Check server logs."}), 500
+
     try:
         data = request.json
         country = data['country']
@@ -74,60 +68,53 @@ def analyze_deforestation():
             ee.Filter.eq('ADM0_NAME', country),
             ee.Filter.eq('ADM1_NAME', province)
         )).geometry()
-        aoi_geojson = aoi.getInfo()
 
-        # Composites
         image1 = get_composite(start_year, aoi)
         image2 = get_composite(end_year, aoi)
 
-        # Index
         index1 = get_ndvi(image1) if method == 'NDVI' else get_evi(image1)
         index2 = get_ndvi(image2) if method == 'NDVI' else get_evi(image2)
 
-        # Change map
         change = index2.subtract(index1)
-        change_map = change.getMapId({'min': -0.5, 'max': 0.5, 'palette': ['red','white','green']})
-        change_tile = change_map['tile_fetcher'].url_format
-
-        # Forest mask + deforested
+        
         forest_threshold = 0.5
         forest1 = index1.gt(forest_threshold)
         forest2 = index2.gt(forest_threshold)
         deforested = forest1.And(forest2.Not()).selfMask()
 
-        pixel_area = ee.Image.pixelArea().divide(1e6)  # km²
-        deforested_area_stat = deforested.multiply(pixel_area).reduceRegion(
-            reducer=ee.Reducer.sum(),
+        # --- OPTIMIZED STATISTICS CALCULATION ---
+        pixel_area = ee.Image.pixelArea().divide(1e6)
+        stats_image = deforested.multiply(pixel_area).addBands(change)
+        
+        stats = stats_image.reduceRegion(
+            reducer=ee.Reducer.sum().combine(ee.Reducer.min(), '', True),
             geometry=aoi,
-            scale=500,
+            scale=1000, # Increased scale for faster stats
             maxPixels=1e9,
             bestEffort=True
         )
-        deforested_area = deforested_area_stat.get('nd').getInfo() or 0
+        
+        # Call getInfo() only ONCE for all stats
+        stats_info = stats.getInfo()
+        deforested_area = stats_info.get('nd_sum', 0)
+        min_index = stats_info.get('nd_min', 0)
 
+        # --- GENERATE MAP TILES (NON-BLOCKING) ---
         deforested_map = deforested.getMapId({'palette': 'red', 'min': 0, 'max': 1})
-        deforested_tile = deforested_map['tile_fetcher'].url_format
-
-        # Max NDVI/EVI loss
-        min_index = change.reduceRegion(
-            reducer=ee.Reducer.min(),
-            geometry=aoi,
-            scale=500,
-            bestEffort=True
-        ).get('nd').getInfo() or 0
-
-        # Unsupervised classification (on end-year composite)
-        training = image2.sample(region=aoi, scale=500, numPixels=5000, seed=1)
+        change_map = change.getMapId({'min': -0.5, 'max': 0.5, 'palette': ['red','white','green']})
+        
+        training = image2.sample(region=aoi, scale=1000, numPixels=5000, seed=1)
         clusterer = ee.Clusterer.wekaKMeans(3).train(training)
         classified = image2.cluster(clusterer)
         classified_map = classified.getMapId({'min': 0, 'max': 2, 'palette': ['green','yellow','brown']})
-        classified_tile = classified_map['tile_fetcher'].url_format
+        
+        aoi_geojson = aoi.getInfo()
 
         return jsonify({
             'tiles': {
-                'deforested': deforested_tile,
-                'change': change_tile,
-                'clusters': classified_tile
+                'deforested': deforested_map['tile_fetcher'].url_format,
+                'change': change_map['tile_fetcher'].url_format,
+                'clusters': classified_map['tile_fetcher'].url_format
             },
             'stats': {
                 'deforestedAreaKm2': round(deforested_area, 2),
