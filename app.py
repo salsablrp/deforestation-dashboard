@@ -26,21 +26,17 @@ try:
 except Exception as e:
     print(f"FATAL: Could not initialize Earth Engine. Error details: {e}")
 
-# --- UTILS with Error Handling ---
+# --- UTILS ---
 def get_composite(year, aoi):
     start = ee.Date.fromYMD(year, 6, 1)
     end = ee.Date.fromYMD(year, 9, 30)
-    
-    collection = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
+    return ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
         .filterBounds(aoi) \
         .filterDate(start, end) \
-        .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
-
-    # **CRITICAL CHECK**: Ensure the collection is not empty
-    if collection.size().getInfo() == 0:
-        raise ee.ee_exception.EEException(f"No cloud-free images found for the year {year}. Please try a different year or a larger date range.")
-        
-    return collection.median().select(['B2', 'B3', 'B4', 'B8']).clip(aoi)
+        .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20)) \
+        .median() \
+        .select(['B2', 'B3', 'B4', 'B8']) \
+        .clip(aoi)
 
 def get_ndvi(img):
     return img.normalizedDifference(['B8', 'B4']).rename('nd')
@@ -54,11 +50,6 @@ def get_evi(img):
 # --- API ENDPOINT ---
 @app.route('/analyze', methods=['POST'])
 def analyze_deforestation():
-    try:
-        ee.Number(1).getInfo() # Quick check to see if GEE is usable
-    except Exception:
-        return jsonify({"error": "Earth Engine client library not initialized on the server. Check server logs."}), 500
-
     try:
         data = request.json
         country = data['country']
@@ -96,7 +87,7 @@ def analyze_deforestation():
         # --- AOI boundary simplified ---
         aoi_geojson = aoi.simplify(5000).getInfo()
 
-        # --- STATISTICS (wrapped in try/except for robustness) ---
+        # --- STATISTICS (wrapped in try/except) ---
         deforested_area, min_index = 0, 0
         try:
             pixel_area = ee.Image.pixelArea().divide(1e6)
@@ -111,8 +102,7 @@ def analyze_deforestation():
             deforested_area = stats_info.get('nd_sum', 0)
             min_index = stats_info.get('nd_min', 0)
         except Exception as e:
-            # If stats fail, we can still return the maps
-            print(f"⚠️ Stats computation failed (but maps will be returned): {e}")
+            print(f"⚠️ Stats computation failed (but maps returned): {e}")
 
         return jsonify({
             'tiles': {
@@ -121,15 +111,12 @@ def analyze_deforestation():
                 'clusters': classified_map['tile_fetcher'].url_format
             },
             'stats': {
-                'deforestedAreaKm2': round(deforested_area or 0, 2),
-                'maxIndexLoss': round(min_index or 0, 3)
+                'deforestedAreaKm2': round(deforested_area, 2),
+                'maxIndexLoss': round(min_index, 3)
             },
             'aoi': aoi_geojson
         })
 
-    except ee.ee_exception.EEException as e:
-        print(f"GEE Error: {e}")
-        return jsonify({"error": f"GEE Error: {e}"}), 500
     except Exception as e:
         print(f"Server Error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -137,4 +124,3 @@ def analyze_deforestation():
 
 if __name__ == '__main__':
     app.run(debug=True)
-
